@@ -102,16 +102,40 @@ class ConicProgram:
             x = self.x.value
         if x is None:
             return None
-        value = x[self.id_to_range[convex_variable.id]]
+
+        ranges = self.id_to_range[convex_variable.id]
+
+        # Complex variable: ranges is a (real_range, imag_range) tuple.
+        if isinstance(ranges, tuple):
+            real_range, imag_range = ranges
+            real_value = x[real_range]
+            imag_value = x[imag_range]
+            value = real_value + 1j * imag_value
+            if len(convex_variable.shape) == 1:
+                return value
+            if convex_variable.is_hermitian():
+                n = convex_variable.shape[0]
+                # Real part: upper triangular -> symmetric.
+                mat_real = np.zeros((n, n))
+                mat_real[np.triu_indices(n)] = real_value
+                mat_real.T[np.triu_indices(n)] = real_value
+                # Imaginary part: strict upper triangular -> skew-symmetric.
+                mat_imag = np.zeros((n, n))
+                mat_imag[np.triu_indices(n, k=1)] = imag_value
+                mat_imag = mat_imag - mat_imag.T
+                return mat_real + 1j * mat_imag
+            return value.reshape(convex_variable.shape, order='F')
+
+        value = x[ranges]
 
         # One dimensional vector.
         if len(convex_variable.shape) == 1:
             return value
-        
+
         # Asymmetric matrix.
         if not convex_variable.is_symmetric():
             return value.reshape(convex_variable.shape, order='F')
-        
+
         # Symmetric matrix.
         n = convex_variable.shape[0]
         mat_value = np.zeros((n, n))
@@ -131,7 +155,9 @@ class ConicProgram:
 
 class ConvexProgram:
 
-    supported_attributes = ["nonneg", "nonpos", "symmetric", "PSD", "NSD"]
+    supported_attributes = [
+        "nonneg", "nonpos", "symmetric", "PSD", "NSD", "complex", "hermitian",
+    ]
 
     def __init__(self):
         self.variables = []
@@ -211,6 +237,21 @@ class ConvexProgram:
             start = cp_conic.var_id_to_col[variable.id]
             stop = start + variable.size
             id_to_range[variable.id] = range(start, stop)
+
+        # Map original variable IDs to their reduced counterparts (e.g.,
+        # CvxAttr2Constr creates new variables for PSD/symmetric attributes,
+        # Complex2Real splits complex variables into real/imag parts).
+        var_id_map = chain.compose_var_id_map()
+        for variable in self.variables:
+            if variable.id not in id_to_range and variable.id in var_id_map:
+                mapped_ids = var_id_map[variable.id]
+                if len(mapped_ids) == 1 and mapped_ids[0] in id_to_range:
+                    id_to_range[variable.id] = id_to_range[mapped_ids[0]]
+                elif len(mapped_ids) == 2 and variable.is_complex():
+                    real_id, imag_id = mapped_ids
+                    if real_id in id_to_range and imag_id in id_to_range:
+                        id_to_range[variable.id] = (
+                            id_to_range[real_id], id_to_range[imag_id])
 
         # Initialize empty conic program.
         conic_program = ConicProgram(cp_conic.x.size, id_to_range, self.binary_variable)

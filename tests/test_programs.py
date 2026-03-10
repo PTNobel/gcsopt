@@ -425,5 +425,74 @@ class TestConvexProgram(unittest.TestCase):
         self.assertAlmostEqual(convex_value, 0, places=4)
         self.assertAlmostEqual(conic_value, 0, places=4)
 
+    def test_complex_variable(self):
+        # Simple complex least-squares:
+        #   minimize ||x - (1+1j, 2+2j)||_2
+        prog = ConvexProgram()
+        x = prog.add_variable(2, complex=True)
+        target = np.array([1+1j, 2+2j])
+        prog.add_cost(cp.norm2(x - target))
+
+        convex_value = prog.solve()
+        self.assertAlmostEqual(convex_value, 0, places=4)
+        np.testing.assert_array_almost_equal(x.value, target, decimal=4)
+
+        conic_prog = prog.to_conic()
+        conic_value = conic_prog.solve()
+        self.assertAlmostEqual(convex_value, conic_value, places=4)
+        conic_x = conic_prog.get_convex_variable_value(x)
+        np.testing.assert_array_almost_equal(x.value, conic_x, decimal=4)
+
+    def test_complex_variable_with_constraints(self):
+        # Complex variable with real constraint:
+        #   minimize ||x - (3+4j)||_2
+        #   subject to real(x) >= 5
+        prog = ConvexProgram()
+        x = prog.add_variable(1, complex=True)
+        prog.add_cost(cp.norm2(x - (3+4j)))
+        prog.add_constraint(cp.real(x) >= 5)
+
+        convex_value = prog.solve()
+        conic_prog = prog.to_conic()
+        conic_value = conic_prog.solve()
+        self.assertAlmostEqual(convex_value, conic_value, places=4)
+        conic_x = conic_prog.get_convex_variable_value(x)
+        np.testing.assert_array_almost_equal(x.value, conic_x, decimal=4)
+
+    def test_complex_and_real_variables(self):
+        # Mix of complex and real variables:
+        #   minimize ||z - (1+1j, 2+2j)||_2 + ||w - (3, 4)||_2
+        prog = ConvexProgram()
+        z = prog.add_variable(2, complex=True)
+        w = prog.add_variable(2)
+        prog.add_cost(cp.norm2(z - np.array([1+1j, 2+2j])) +
+                      cp.norm2(w - np.array([3, 4])))
+
+        convex_value = prog.solve()
+        conic_prog = prog.to_conic()
+        conic_value = conic_prog.solve()
+        self.assertAlmostEqual(convex_value, conic_value, places=4)
+
+        conic_z = conic_prog.get_convex_variable_value(z)
+        conic_w = conic_prog.get_convex_variable_value(w)
+        np.testing.assert_array_almost_equal(z.value, conic_z, decimal=4)
+        np.testing.assert_array_almost_equal(w.value, conic_w, decimal=4)
+
+    def test_hermitian_variable(self):
+        # Hermitian PSD variable:
+        #   minimize -log_det(X)
+        #   subject to X[0,0] == 1, X[1,1] == 1
+        prog = ConvexProgram()
+        X = prog.add_variable((2, 2), complex=True, PSD=True)
+        prog.add_cost(-cp.log_det(X))
+        prog.add_constraints([X[0,0] == 1, X[1,1] == 1])
+
+        convex_value = prog.solve()
+        conic_prog = prog.to_conic()
+        conic_value = conic_prog.solve()
+        self.assertAlmostEqual(convex_value, conic_value, places=4)
+        conic_X = conic_prog.get_convex_variable_value(X)
+        np.testing.assert_array_almost_equal(X.value, conic_X, decimal=4)
+
 if __name__ == '__main__':
     unittest.main()
